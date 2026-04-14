@@ -231,7 +231,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     <img class="hero-avatar" src="/static/widget/letizia.png" alt="Letizia">
     <h1>Salute ! Moi c'est <span>Letizia</span></h1>
     <p class="tagline">Ta guide corse, 100% locale</p>
-    <p><em>D'Aiacciu a Luri, da Sant'Antuninu a Quenza, dimmi cio ch'e tu cerchi, e t'aiutaraghju !</em><br>D'Ajaccio a Luri, de Sant'Antonino a Quenza, dis-moi ce que tu cherches et je t'aiderai !</p>
+    <p><em>D'Aiacciu \u00e0 Luri, da Sant'Antuninu \u00e0 Quenza, dimmi ci\u00f2 ch'\u00e8 t\u00f9 cerchi, \u00e8 t'aiutaraghju !</em><br>D'Ajaccio \u00e0 Luri, de Sant'Antonino \u00e0 Quenza, dis-moi ce que tu cherches et je t'aiderai !</p>
   </section>
 
   <div class="features">
