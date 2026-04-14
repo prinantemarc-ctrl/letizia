@@ -184,6 +184,17 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     .cta-geo svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
     .foot { text-align: center; padding: 2rem; font-size: .8rem; color: #aaa; border-top: 1px solid #eee; }
+
+    @media(max-width:480px) {
+      .hero { padding: 2.5rem 1.25rem 2rem; }
+      .hero-avatar { width: 90px; height: 90px; }
+      .hero .tagline { font-size: 1rem; }
+      .hero p { font-size: .95rem; }
+      .features { padding: 0 1rem; gap: 12px; grid-template-columns: 1fr; }
+      .actions { padding: 0 1rem; flex-direction: column; align-items: stretch; }
+      .cta { justify-content: center; padding: 14px 20px; font-size: .95rem; }
+      .nav { padding: 14px 16px; }
+    }
   </style>
 </head>
 <body>
