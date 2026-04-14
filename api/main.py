@@ -142,6 +142,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     if _WIDGET_DIR.is_dir():
         app.mount("/static/widget", StaticFiles(directory=str(_WIDGET_DIR)), name="widget_static")
 
+    @app.get("/", response_class=HTMLResponse)
     @app.get("/demo", response_class=HTMLResponse)
     def demo_page() -> HTMLResponse:
         html = """<!DOCTYPE html>
