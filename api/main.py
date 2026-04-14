@@ -335,7 +335,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     def _stream_llm(user_msg: str) -> Generator[str, None, None]:
         if settings.anthropic_api_key:
-            client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+            client = anthropic.Anthropic(
+                api_key=settings.anthropic_api_key,
+                max_retries=1,
+                timeout=55.0,
+            )
             with client.messages.stream(
                 model=settings.anthropic_model,
                 max_tokens=4096,

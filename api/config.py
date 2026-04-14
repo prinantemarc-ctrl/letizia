@@ -44,9 +44,14 @@ class Settings(BaseSettings):
     web_fetch_timeout: float = 5.0
 
     @model_validator(mode="after")
-    def _resolve_relative_paths(self) -> Settings:
+    def _resolve_and_strip(self) -> Settings:
         if not self.pages_jsonl.is_absolute():
             object.__setattr__(self, "pages_jsonl", _PROJECT_ROOT / self.pages_jsonl)
+        for field in ("chroma_host", "chroma_api_key", "chroma_tenant", "chroma_database",
+                       "anthropic_api_key", "openai_api_key"):
+            val = getattr(self, field, "")
+            if isinstance(val, str) and val != val.strip():
+                object.__setattr__(self, field, val.strip())
         return self
 
 
