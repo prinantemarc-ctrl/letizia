@@ -94,13 +94,15 @@ def embed_texts(texts: list[str], settings: Settings) -> list[list[float]]:
 _chroma_col_cache: dict = {}
 
 def get_collection(settings: Settings):
-    key = (settings.chroma_host, settings.chroma_collection)
+    key = (settings.chroma_host, settings.chroma_tenant, settings.chroma_database, settings.chroma_collection)
     if key not in _chroma_col_cache:
         client = chromadb.HttpClient(
             host=settings.chroma_host,
             port=443,
             ssl=True,
-            headers={"Authorization": f"Bearer {settings.chroma_token}"},
+            headers={"X-Chroma-Token": settings.chroma_api_key},
+            tenant=settings.chroma_tenant,
+            database=settings.chroma_database,
         )
         _chroma_col_cache[key] = client.get_collection(settings.chroma_collection)
     return _chroma_col_cache[key]
@@ -367,7 +369,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     def _rag_search(question: str) -> list[str]:
         chunks: list[str] = []
-        if not settings.chroma_host or not settings.chroma_token or not settings.openai_api_key:
+        if not settings.chroma_api_key or not settings.chroma_tenant or not settings.openai_api_key:
             return chunks
         try:
             col = get_collection(settings)

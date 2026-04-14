@@ -28,8 +28,10 @@ class Settings(BaseSettings):
     pages_jsonl: Path = Path("data/raw/pages_fr.jsonl")
 
     # Chroma Cloud
-    chroma_host: str = ""
-    chroma_token: str = ""
+    chroma_host: str = "api.trychroma.com"
+    chroma_api_key: str = ""
+    chroma_tenant: str = ""
+    chroma_database: str = ""
     chroma_collection: str = "visit_corsica_fr"
 
     rag_top_k: int = 6

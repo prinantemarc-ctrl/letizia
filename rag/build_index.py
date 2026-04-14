@@ -5,7 +5,7 @@ Usage (depuis la racine visit-corsica-chatbot):
   python -m rag.build_index
 
 Requiert les variables d'environnement :
-  OPENAI_API_KEY, CHROMA_HOST, CHROMA_TOKEN
+  OPENAI_API_KEY, CHROMA_API_KEY, CHROMA_TENANT, CHROMA_DATABASE
 """
 
 from __future__ import annotations
@@ -36,18 +36,19 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pages", type=Path, default=Path("data/raw/pages_fr.jsonl"))
     parser.add_argument("--reset", action="store_true", help="Supprime la collection existante")
-
-    # Chroma Cloud params (env ou CLI)
-    parser.add_argument("--chroma-host", default=os.environ.get("CHROMA_HOST", ""))
-    parser.add_argument("--chroma-token", default=os.environ.get("CHROMA_TOKEN", ""))
     args = parser.parse_args()
 
     openai_key = os.environ.get("OPENAI_API_KEY", "")
+    chroma_host = os.environ.get("CHROMA_HOST", "api.trychroma.com")
+    chroma_api_key = os.environ.get("CHROMA_API_KEY", "")
+    chroma_tenant = os.environ.get("CHROMA_TENANT", "")
+    chroma_database = os.environ.get("CHROMA_DATABASE", "")
+
     if not openai_key:
         print("OPENAI_API_KEY requis pour les embeddings.", file=sys.stderr)
         sys.exit(1)
-    if not args.chroma_host or not args.chroma_token:
-        print("CHROMA_HOST et CHROMA_TOKEN requis (env ou --chroma-host/--chroma-token).", file=sys.stderr)
+    if not chroma_api_key or not chroma_tenant or not chroma_database:
+        print("CHROMA_API_KEY, CHROMA_TENANT et CHROMA_DATABASE requis.", file=sys.stderr)
         sys.exit(1)
 
     if not args.pages.is_file():
@@ -58,10 +59,12 @@ def main() -> None:
 
     print("Connexion à Chroma Cloud...", file=sys.stderr)
     client = chromadb.HttpClient(
-        host=args.chroma_host,
+        host=chroma_host,
         port=443,
         ssl=True,
-        headers={"Authorization": f"Bearer {args.chroma_token}"},
+        headers={"X-Chroma-Token": chroma_api_key},
+        tenant=chroma_tenant,
+        database=chroma_database,
     )
 
     if args.reset:
