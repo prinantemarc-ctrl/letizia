@@ -13,11 +13,9 @@ import os
 import re
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor, Future
-from functools import lru_cache
 from pathlib import Path
 
 import chromadb
-from chromadb.config import Settings as ChromaSettings
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -25,14 +23,11 @@ from fastapi.staticfiles import StaticFiles
 import anthropic
 from openai import OpenAI
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
 
 from api.config import Settings, get_settings
 from api.web_search import gather_web_context
 
 logger = logging.getLogger(__name__)
-
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _WIDGET_DIR = _PROJECT_ROOT / "widget"
@@ -77,20 +72,35 @@ class ChatResponse(BaseModel):
     answer: str
 
 
-# ── Helpers ──────────────────────────────────────────────────────────
-@lru_cache(maxsize=1)
-def embedding_model(name: str) -> SentenceTransformer:
-    return SentenceTransformer(name)
+# ── Helpers cloud-based ──────────────────────────────────────────────
+_openai_client_cache: dict[str, OpenAI] = {}
+
+def _get_openai(settings: Settings) -> OpenAI:
+    key = settings.openai_api_key
+    if key not in _openai_client_cache:
+        kw: dict = {"api_key": key}
+        if settings.openai_base_url:
+            kw["base_url"] = settings.openai_base_url
+        _openai_client_cache[key] = OpenAI(**kw)
+    return _openai_client_cache[key]
+
+
+def embed_texts(texts: list[str], settings: Settings) -> list[list[float]]:
+    oa = _get_openai(settings)
+    resp = oa.embeddings.create(model=settings.openai_embedding_model, input=texts)
+    return [d.embedding for d in resp.data]
 
 
 _chroma_col_cache: dict = {}
 
 def get_collection(settings: Settings):
-    key = (str(settings.chroma_path), settings.chroma_collection)
+    key = (settings.chroma_host, settings.chroma_collection)
     if key not in _chroma_col_cache:
-        client = chromadb.PersistentClient(
-            path=str(settings.chroma_path),
-            settings=ChromaSettings(anonymized_telemetry=False),
+        client = chromadb.HttpClient(
+            host=settings.chroma_host,
+            port=443,
+            ssl=True,
+            headers={"Authorization": f"Bearer {settings.chroma_token}"},
         )
         _chroma_col_cache[key] = client.get_collection(settings.chroma_collection)
     return _chroma_col_cache[key]
@@ -123,6 +133,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         return {
             "anthropic_configured": bool(settings.anthropic_api_key),
             "openai_configured": bool(settings.openai_api_key),
+            "chroma_configured": bool(settings.chroma_host and settings.chroma_token),
             "llm_configured": bool(settings.anthropic_api_key or settings.openai_api_key),
         }
 
@@ -153,16 +164,20 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     .hero .tagline { font-size: 1.15rem; color: var(--blue); font-weight: 600; margin-bottom: 1rem; font-style: italic; }
     .hero p { font-size: 1.05rem; line-height: 1.6; color: var(--grey); max-width: 36rem; margin: 0 auto 2rem; }
 
-    .features { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 20px; max-width: 54rem; margin: 0 auto 3.5rem; padding: 0 2rem; }
-    .feat { background: var(--light); border-radius: 14px; padding: 1.5rem; border: 1px solid #eee; }
+    .features { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 20px; max-width: 54rem; margin: 0 auto 2.5rem; padding: 0 2rem; }
+    .feat { background: var(--light); border-radius: 14px; padding: 1.5rem; border: 1px solid #eee; cursor: pointer; transition: border-color .15s, box-shadow .15s, transform .15s; text-decoration: none; display: block; color: inherit; }
+    .feat:hover { border-color: var(--blue); box-shadow: 0 4px 16px rgba(53,110,181,.12); transform: translateY(-2px); }
     .feat h3 { font-size: .95rem; font-weight: 700; margin-bottom: .4rem; }
     .feat h3 .co { color: var(--blue); font-style: italic; font-weight: 600; }
     .feat p { font-size: .88rem; line-height: 1.5; color: var(--grey); }
 
-    .cta-wrap { text-align: center; margin-bottom: 4rem; }
+    .actions { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; max-width: 54rem; margin: 0 auto 3.5rem; padding: 0 2rem; }
     .cta { display: inline-flex; align-items: center; gap: 10px; padding: 15px 34px; border-radius: 14px; border: none; background: var(--blue); color: #fff; font-size: 1.05rem; font-weight: 700; cursor: pointer; box-shadow: 0 4px 16px rgba(53,110,181,.25); transition: background .15s,box-shadow .15s; }
     .cta:hover { background: #2b5a96; box-shadow: 0 6px 22px rgba(53,110,181,.35); }
     .cta img { width: 32px; height: 32px; border-radius: 50%; border: 2px solid rgba(255,255,255,.4); }
+    .cta-geo { background: #fff; color: var(--dark); border: 1.5px solid #ddd; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+    .cta-geo:hover { border-color: var(--blue); color: var(--blue); box-shadow: 0 4px 14px rgba(53,110,181,.12); background: #fff; }
+    .cta-geo svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
     .foot { text-align: center; padding: 2rem; font-size: .8rem; color: #aaa; border-top: 1px solid #eee; }
   </style>
@@ -179,28 +194,32 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     <img class="hero-avatar" src="/static/widget/letizia.png" alt="Letizia">
     <h1>Salute ! Moi c'est <span>Letizia</span></h1>
     <p class="tagline">Ta guide corse, 100% locale</p>
-    <p>D'Aiacciu (Ajaccio) à Bunifaziu (Bonifacio), de Calvi à Portivechju (Porto-Vecchio)... Dis-moi ce que tu cherches et je te prépare ton séjour sur mesure. Prufittate bè !</p>
+    <p>D'Aiacciu (Ajaccio) a Bunifaziu (Bonifacio), de Calvi a Portivechju (Porto-Vecchio)... Dis-moi ce que tu cherches et je te prepare ton sejour sur mesure. Prufittate be !</p>
   </section>
 
   <div class="features">
-    <div class="feat">
-      <h3>A piaghja <span class="co">(la plage)</span></h3>
-      <p>Les criques secrètes, les plages familiales, où se baigner mois par mois, les coins snorkeling...</p>
-    </div>
-    <div class="feat">
+    <a class="feat" onclick="askLetizia('Je cherche des plages et criques peu connues en Corse, ou me baigner tranquille selon la saison ?')">
+      <h3>A piaghja <span class="co">(la plaine)</span></h3>
+      <p>Les criques secretes, les plages familiales, ou se baigner mois par mois, les coins snorkeling...</p>
+    </a>
+    <a class="feat" onclick="askLetizia('Quels sentiers de montagne tu conseilles en Corse ? Aussi bien haute montagne que balades faciles en famille.')">
       <h3>A muntagna <span class="co">(la montagne)</span></h3>
-      <p>GR20, sentiers faciles en famille, piscines naturelles, villages perchés, bergeries...</p>
-    </div>
-    <div class="feat">
+      <p>Sentiers de haute montagne, sentiers faciles en famille, piscines naturelles, villages perches, bergeries...</p>
+    </a>
+    <a class="feat" onclick="askLetizia('Quels villages corses tu recommandes pour decouvrir la culture, la gastronomie et les marches locaux ?')">
       <h3>U paese <span class="co">(le village)</span></h3>
-      <p>Culture, fêtes, gastronomie corse, bons plans restos, marchés, artisans...</p>
-    </div>
+      <p>Culture, fetes, gastronomie corse, bons plans restos, marches, artisans...</p>
+    </a>
   </div>
 
-  <div class="cta-wrap">
+  <div class="actions">
     <button class="cta" onclick="document.getElementById('vc-chat-fab').click()">
       <img src="/static/widget/letizia.png" alt="">
       Dumanda ! Pose ta question
+    </button>
+    <button class="cta cta-geo" onclick="geoAsk()">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2a7 7 0 0 1 7 7c0 5.25-7 13-7 13S5 14.25 5 9a7 7 0 0 1 7-7z"/></svg>
+      Que faire autour de moi ?
     </button>
   </div>
 
@@ -208,19 +227,52 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
   <script>window.VISIT_CORSA_CHAT_API = window.location.origin;</script>
   <script src="/static/widget/visit-corsica-chat.js" defer></script>
+  <script>
+  function waitForWidget(cb) {
+    var check = setInterval(function() {
+      if (document.getElementById('vc-chat-fab')) { clearInterval(check); cb(); }
+    }, 100);
+  }
+  function askLetizia(q) {
+    waitForWidget(function() {
+      var fab = document.getElementById('vc-chat-fab');
+      var panel = document.getElementById('vc-chat-panel');
+      if (!panel.classList.contains('open')) fab.click();
+      setTimeout(function() {
+        var input = document.getElementById('vc-chat-input');
+        var form = document.getElementById('vc-chat-form');
+        if (input && form) {
+          input.value = q;
+          form.dispatchEvent(new Event('submit', {bubbles:true, cancelable:true}));
+        }
+      }, 400);
+    });
+  }
+  function geoAsk() {
+    if (!navigator.geolocation) {
+      askLetizia("Qu'est-ce qu'il y a de sympa a faire en Corse en ce moment ?");
+      return;
+    }
+    var btn = document.querySelector('.cta-geo');
+    if (btn) btn.textContent = 'Localisation...';
+    navigator.geolocation.getCurrentPosition(
+      function(pos) {
+        if (btn) btn.textContent = 'Que faire autour de moi ?';
+        var lat = pos.coords.latitude.toFixed(4);
+        var lon = pos.coords.longitude.toFixed(4);
+        askLetizia("Je suis en Corse a la position GPS " + lat + ", " + lon + ". Qu'est-ce qu'il y a a voir et a faire pres de moi ?");
+      },
+      function(err) {
+        if (btn) btn.textContent = 'Que faire autour de moi ?';
+        askLetizia("Qu'est-ce qu'il y a de sympa a faire en Corse en ce moment ?");
+      },
+      {enableHighAccuracy: true, timeout: 8000}
+    );
+  }
+  </script>
 </body>
 </html>"""
         return HTMLResponse(content=html)
-
-    # ── Warmup : précharger le modèle d'embedding au démarrage ─────
-    @app.on_event("startup")
-    def _warmup():
-        try:
-            emb = embedding_model(settings.embedding_model)
-            emb.encode(["warmup"], normalize_embeddings=True)
-            logger.info("Modèle d'embedding pré-chargé.")
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Warmup embedding échoué : %s", e)
 
     # ── Prompt système ──────────────────────────────────────────────
     SYSTEM = (
@@ -279,7 +331,6 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     )
 
     def _stream_llm(user_msg: str) -> Generator[str, None, None]:
-        """Yield text chunks from LLM (streaming)."""
         if settings.anthropic_api_key:
             client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
             with client.messages.stream(
@@ -293,10 +344,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             return
 
         if settings.openai_api_key:
-            kw: dict = {"api_key": settings.openai_api_key}
-            if settings.openai_base_url:
-                kw["base_url"] = settings.openai_base_url
-            oa = OpenAI(**kw)
+            oa = _get_openai(settings)
             stream = oa.chat.completions.create(
                 model=settings.openai_chat_model,
                 messages=[
@@ -319,10 +367,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     def _rag_search(question: str) -> list[str]:
         chunks: list[str] = []
+        if not settings.chroma_host or not settings.chroma_token or not settings.openai_api_key:
+            return chunks
         try:
             col = get_collection(settings)
-            emb = embedding_model(settings.embedding_model)
-            q_emb = emb.encode([question], normalize_embeddings=True).tolist()
+            q_emb = embed_texts([question], settings)
             res = col.query(
                 query_embeddings=q_emb,
                 n_results=settings.rag_top_k,
@@ -352,7 +401,6 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     _search_pool = ThreadPoolExecutor(max_workers=4)
 
     def _build_user_msg(question: str) -> str:
-        """RAG + web search en parallèle. Si le RAG est riche, on n'attend pas le web."""
         rag_fut = _search_pool.submit(_rag_search, question)
         web_fut = _search_pool.submit(_web_search, question)
 
@@ -389,7 +437,6 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         def generate():
             import time
 
-            # Phase recherche : heartbeat pendant RAG + web (en parallèle dans un thread)
             build_pool = ThreadPoolExecutor(max_workers=1)
             msg_future = build_pool.submit(_build_user_msg, question)
             while not msg_future.done():
@@ -398,7 +445,6 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             build_pool.shutdown(wait=False)
             user_msg = msg_future.result()
 
-            # Phase LLM : streaming token par token
             full: list[str] = []
             try:
                 for chunk in _stream_llm(user_msg):

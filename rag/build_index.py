@@ -1,49 +1,73 @@
 """
-Construit l'index vectoriel Chroma à partir de data/raw/pages_fr.jsonl.
+Construit l'index vectoriel Chroma Cloud à partir de data/raw/pages_fr.jsonl.
 
 Usage (depuis la racine visit-corsica-chatbot):
   python -m rag.build_index
+
+Requiert les variables d'environnement :
+  OPENAI_API_KEY, CHROMA_HOST, CHROMA_TOKEN
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import time
 import uuid
 from pathlib import Path
 
 import chromadb
-from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
+from openai import OpenAI
 
 from rag.chunking import chunk_text
 
 COLLECTION = "visit_corsica_fr"
-MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+EMBEDDING_MODEL = "text-embedding-3-small"
+
+
+def embed_batch(client: OpenAI, texts: list[str]) -> list[list[float]]:
+    resp = client.embeddings.create(model=EMBEDDING_MODEL, input=texts)
+    return [d.embedding for d in resp.data]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pages", type=Path, default=Path("data/raw/pages_fr.jsonl"))
-    parser.add_argument("--chroma", type=Path, default=Path("data/chroma"))
     parser.add_argument("--reset", action="store_true", help="Supprime la collection existante")
+
+    # Chroma Cloud params (env ou CLI)
+    parser.add_argument("--chroma-host", default=os.environ.get("CHROMA_HOST", ""))
+    parser.add_argument("--chroma-token", default=os.environ.get("CHROMA_TOKEN", ""))
     args = parser.parse_args()
+
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if not openai_key:
+        print("OPENAI_API_KEY requis pour les embeddings.", file=sys.stderr)
+        sys.exit(1)
+    if not args.chroma_host or not args.chroma_token:
+        print("CHROMA_HOST et CHROMA_TOKEN requis (env ou --chroma-host/--chroma-token).", file=sys.stderr)
+        sys.exit(1)
 
     if not args.pages.is_file():
         print(f"Fichier introuvable: {args.pages}", file=sys.stderr)
         sys.exit(1)
 
-    args.chroma.mkdir(parents=True, exist_ok=True)
+    oa = OpenAI(api_key=openai_key)
 
-    print("Chargement du modèle d'embeddings (premier lancement : téléchargement)...", file=sys.stderr)
-    model = SentenceTransformer(MODEL_NAME)
-
-    client = chromadb.PersistentClient(path=str(args.chroma), settings=Settings(anonymized_telemetry=False))
+    print("Connexion à Chroma Cloud...", file=sys.stderr)
+    client = chromadb.HttpClient(
+        host=args.chroma_host,
+        port=443,
+        ssl=True,
+        headers={"Authorization": f"Bearer {args.chroma_token}"},
+    )
 
     if args.reset:
         try:
             client.delete_collection(COLLECTION)
+            print(f"Collection '{COLLECTION}' supprimée.", file=sys.stderr)
         except Exception:  # noqa: BLE001
             pass
 
@@ -74,13 +98,27 @@ def main() -> None:
         sys.exit(1)
 
     batch = 64
-    print(f"Indexation de {len(documents)} chunks...", file=sys.stderr)
-    for start in range(0, len(documents), batch):
-        end = min(start + batch, len(documents))
-        emb = model.encode(documents[start:end], normalize_embeddings=True).tolist()
-        collection.add(ids=ids[start:end], documents=documents[start:end], metadatas=metadatas[start:end], embeddings=emb)
+    total = len(documents)
+    print(f"Indexation de {total} chunks (batch={batch})...", file=sys.stderr)
 
-    print(f"OK -> Chroma: {args.chroma} (collection {COLLECTION})", file=sys.stderr)
+    for start in range(0, total, batch):
+        end = min(start + batch, total)
+        batch_docs = documents[start:end]
+
+        emb = embed_batch(oa, batch_docs)
+        collection.add(
+            ids=ids[start:end],
+            documents=batch_docs,
+            metadatas=metadatas[start:end],
+            embeddings=emb,
+        )
+
+        done = min(end, total)
+        print(f"  {done}/{total} chunks indexés", file=sys.stderr)
+        if end < total:
+            time.sleep(0.2)
+
+    print(f"OK -> Chroma Cloud collection '{COLLECTION}' ({total} chunks)", file=sys.stderr)
 
 
 if __name__ == "__main__":

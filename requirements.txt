@@ -3,9 +3,8 @@ httpx==0.28.1
 trafilatura==2.0.0
 lxml==5.3.0
 
-# RAG
-chromadb==0.5.23
-sentence-transformers==3.3.1
+# RAG (cloud-based)
+chromadb-client>=0.5.0,<1
 
 # API
 fastapi==0.115.6
