@@ -142,11 +142,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     * { box-sizing: border-box; margin: 0; }
     body { min-height: 100vh; font-family: "Segoe UI", system-ui, -apple-system, sans-serif; color: var(--dark); background: #fff; }
 
-    .nav { display: flex; align-items: center; justify-content: space-between; padding: 18px 28px; border-bottom: 1px solid #eee; }
+    .nav { display: flex; align-items: center; padding: 18px 28px; border-bottom: 1px solid #eee; }
+    .nav a { display: inline-flex; }
     .nav img { height: 26px; filter: invert(1); }
-    .nav-links { display: flex; gap: 24px; }
-    .nav-links a { font-size: .85rem; font-weight: 600; color: var(--grey); text-decoration: none; transition: color .15s; }
-    .nav-links a:hover { color: var(--blue); }
 
     .hero { max-width: 54rem; margin: 0 auto; padding: 4rem 2rem 3rem; text-align: center; }
     .hero-avatar { width: 120px; height: 120px; border-radius: 50%; object-fit: cover; border: 4px solid var(--blue); margin-bottom: 1.25rem; box-shadow: 0 8px 30px rgba(53,110,181,.2); }
@@ -172,11 +170,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 <body>
 
   <nav class="nav">
-    <img src="/static/widget/logo.png" alt="Visit Corsica">
-    <div class="nav-links">
-      <a href="/docs">API</a>
-      <a href="/health">Status</a>
-    </div>
+    <a href="https://www.visit-corsica.com/fr/" target="_blank" rel="noopener">
+      <img src="/static/widget/logo.png" alt="Visit Corsica">
+    </a>
   </nav>
 
   <section class="hero">
