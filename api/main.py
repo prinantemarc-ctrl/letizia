@@ -135,7 +135,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         return {
             "anthropic_configured": bool(settings.anthropic_api_key),
             "openai_configured": bool(settings.openai_api_key),
-            "chroma_configured": bool(settings.chroma_host and settings.chroma_token),
+            "chroma_configured": bool(settings.chroma_api_key and settings.chroma_tenant),
             "llm_configured": bool(settings.anthropic_api_key or settings.openai_api_key),
         }
 
