@@ -150,6 +150,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/png" href="/static/widget/favicon.png">
   <title>Visit Corsica — Letizia, ta guide corse</title>
   <style>
     :root { --blue: #356eb5; --dark: #111; --grey: #555; --light: #f7f7f7; }
