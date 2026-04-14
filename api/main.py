@@ -616,101 +616,166 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/admin", response_class=HTMLResponse)
     def admin_dashboard(key: str = Query("")) -> HTMLResponse:
         _check_admin(key)
-        html = """<!DOCTYPE html>
+        html = r"""<!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" type="image/png" href="/static/widget/favicon.png">
-<title>Letizia — Admin Dashboard</title>
+<title>Letizia — Analytics</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
-:root{--blue:#356eb5;--dark:#111;--grey:#666;--light:#f5f5f5;--green:#2a9d5c;--red:#c0392b}
+:root{--blue:#356eb5;--dark:#0f1117;--card:#1a1d27;--border:#2a2d3a;--text:#e1e4ed;--muted:#8b8fa3;--green:#22c55e;--amber:#f59e0b;--pink:#ec4899;--cyan:#06b6d4;--purple:#a855f7;--red:#ef4444}
 *{box-sizing:border-box;margin:0}
-body{font-family:"Segoe UI",system-ui,sans-serif;background:#fafafa;color:var(--dark);min-height:100vh}
-.top{background:var(--dark);color:#fff;padding:18px 24px;display:flex;align-items:center;justify-content:space-between}
-.top h1{font-size:1.1rem;font-weight:700}
-.top .badge{font-size:.75rem;background:var(--blue);padding:3px 10px;border-radius:20px}
-.wrap{max-width:72rem;margin:0 auto;padding:24px 20px}
+body{font-family:"Inter","Segoe UI",system-ui,sans-serif;background:var(--dark);color:var(--text);min-height:100vh}
 
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:28px}
-.kpi{background:#fff;border-radius:12px;padding:20px;border:1px solid #eee;text-align:center}
-.kpi .val{font-size:1.8rem;font-weight:800;color:var(--blue)}
-.kpi .lbl{font-size:.8rem;color:var(--grey);margin-top:4px}
+.top{background:#13151d;border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
+.top-left{display:flex;align-items:center;gap:12px}
+.top-left img{height:28px;border-radius:50%;border:2px solid var(--blue)}
+.top h1{font-size:1rem;font-weight:700;color:#fff}
+.top h1 span{color:var(--blue);font-weight:400}
+.live{display:flex;align-items:center;gap:6px;font-size:.75rem;color:var(--green)}
+.live-dot{width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 
-.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;margin-bottom:28px}
-.chart{background:#fff;border-radius:12px;padding:20px;border:1px solid #eee}
-.chart h3{font-size:.9rem;font-weight:700;margin-bottom:14px;color:var(--dark)}
-.bar-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-.bar-label{width:110px;font-size:.78rem;color:var(--grey);text-align:right;flex-shrink:0}
-.bar-track{flex:1;height:22px;background:var(--light);border-radius:6px;overflow:hidden}
-.bar-fill{height:100%;background:var(--blue);border-radius:6px;min-width:2px;transition:width .3s}
-.bar-val{width:32px;font-size:.78rem;font-weight:600;color:var(--dark)}
+.wrap{max-width:80rem;margin:0 auto;padding:20px}
 
-.recent{background:#fff;border-radius:12px;padding:20px;border:1px solid #eee}
-.recent h3{font-size:.9rem;font-weight:700;margin-bottom:14px}
-.recent table{width:100%;border-collapse:collapse;font-size:.82rem}
-.recent th{text-align:left;padding:8px 6px;border-bottom:2px solid #eee;color:var(--grey);font-weight:600}
-.recent td{padding:7px 6px;border-bottom:1px solid #f0f0f0}
-.tag{display:inline-block;font-size:.7rem;padding:2px 7px;border-radius:4px;font-weight:600;margin:1px}
-.tag-cat{background:#e8f0fe;color:var(--blue)}
-.tag-reg{background:#e8f8ee;color:var(--green)}
-.tag-dev{background:#f5f5f5;color:var(--grey)}
-#loading{text-align:center;padding:40px;color:var(--grey)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:24px}
+.kpi{background:var(--card);border-radius:14px;padding:22px 20px;border:1px solid var(--border);position:relative;overflow:hidden}
+.kpi::before{content:"";position:absolute;top:0;left:0;right:0;height:3px}
+.kpi:nth-child(1)::before{background:var(--blue)}
+.kpi:nth-child(2)::before{background:var(--green)}
+.kpi:nth-child(3)::before{background:var(--amber)}
+.kpi:nth-child(4)::before{background:var(--pink)}
+.kpi:nth-child(5)::before{background:var(--cyan)}
+.kpi .val{font-size:2rem;font-weight:800;line-height:1}
+.kpi:nth-child(1) .val{color:var(--blue)}
+.kpi:nth-child(2) .val{color:var(--green)}
+.kpi:nth-child(3) .val{color:var(--amber)}
+.kpi:nth-child(4) .val{color:var(--pink)}
+.kpi:nth-child(5) .val{color:var(--cyan)}
+.kpi .lbl{font-size:.78rem;color:var(--muted);margin-top:6px}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px}
+@media(max-width:900px){.grid2,.grid3{grid-template-columns:1fr}}
+
+.card{background:var(--card);border-radius:14px;padding:20px;border:1px solid var(--border)}
+.card h3{font-size:.85rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px}
+.card canvas{width:100%!important;max-height:260px}
+
+.tbl{background:var(--card);border-radius:14px;padding:20px;border:1px solid var(--border);margin-bottom:16px}
+.tbl h3{font-size:.85rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px}
+.tbl table{width:100%;border-collapse:collapse;font-size:.82rem}
+.tbl th{text-align:left;padding:10px 8px;border-bottom:1px solid var(--border);color:var(--muted);font-weight:600;font-size:.75rem;text-transform:uppercase;letter-spacing:.04em}
+.tbl td{padding:10px 8px;border-bottom:1px solid rgba(255,255,255,.04);color:var(--text)}
+.tbl tr:hover td{background:rgba(255,255,255,.02)}
+.tag{display:inline-block;font-size:.68rem;padding:3px 8px;border-radius:6px;font-weight:600;margin:1px}
+.tag-cat{background:rgba(53,110,181,.15);color:#6ba3e8}
+.tag-reg{background:rgba(34,197,94,.12);color:#4ade80}
+.tag-sea{background:rgba(245,158,11,.12);color:#fbbf24}
+.tag-sty{background:rgba(168,85,247,.12);color:#c084fc}
+.tag-dev{background:rgba(255,255,255,.06);color:var(--muted)}
+#loading{text-align:center;padding:60px;color:var(--muted);font-size:.95rem}
 </style>
 </head>
 <body>
 <div class="top">
-  <h1>Letizia — Dashboard Admin</h1>
-  <span class="badge" id="refresh-badge">Auto-refresh 60s</span>
+  <div class="top-left">
+    <img src="/static/widget/letizia.png" alt="">
+    <h1>Letizia <span>Analytics</span></h1>
+  </div>
+  <div class="live"><span class="live-dot"></span> Live</div>
 </div>
-<div class="wrap" id="content"><div id="loading">Chargement...</div></div>
+<div class="wrap" id="content"><div id="loading">Chargement des donnees...</div></div>
 
 <script>
-var KEY = new URLSearchParams(location.search).get('key') || '';
-function fetchStats() {
-  fetch('/api/admin/stats?key=' + encodeURIComponent(KEY))
-    .then(function(r){ return r.json(); })
+var KEY=new URLSearchParams(location.search).get('key')||'';
+var charts={};
+var PAL=['#356eb5','#22c55e','#f59e0b','#ec4899','#06b6d4','#a855f7','#ef4444','#f97316','#14b8a6','#8b5cf6','#64748b','#e11d48'];
+
+function fetchStats(){
+  fetch('/api/admin/stats?key='+encodeURIComponent(KEY))
+    .then(function(r){return r.json()})
     .then(render)
-    .catch(function(e){ document.getElementById('content').innerHTML = '<p style="color:red;padding:40px">Erreur: '+e.message+'</p>'; });
+    .catch(function(e){document.getElementById('content').innerHTML='<p style="color:#ef4444;padding:60px;text-align:center">Erreur: '+e.message+'</p>'});
 }
-function pct(n, total){ return total ? Math.round(n/total*100) : 0; }
-function barChart(title, data, total){
-  var entries = Object.entries(data).sort(function(a,b){return b[1]-a[1];});
-  var max = entries.length ? entries[0][1] : 1;
-  var rows = entries.map(function(e){
-    var w = Math.max(2, Math.round(e[1]/max*100));
-    return '<div class="bar-row"><span class="bar-label">'+e[0]+'</span><div class="bar-track"><div class="bar-fill" style="width:'+w+'%"></div></div><span class="bar-val">'+e[1]+'</span></div>';
-  }).join('');
-  return '<div class="chart"><h3>'+title+'</h3>'+rows+'</div>';
-}
-function render(d){
-  var h = '';
-  h += '<div class="kpis">';
-  h += '<div class="kpi"><div class="val">'+d.total+'</div><div class="lbl">Total conversations</div></div>';
-  h += '<div class="kpi"><div class="val">'+d.today+'</div><div class="lbl">Aujourd\\'hui</div></div>';
-  h += '<div class="kpi"><div class="val">'+d.this_week+'</div><div class="lbl">Cette semaine</div></div>';
-  h += '<div class="kpi"><div class="val">'+pct(d.by_device.mobile||0,d.total)+'%</div><div class="lbl">Mobile</div></div>';
-  h += '</div>';
-  h += '<div class="charts">';
-  h += barChart('Par categorie', d.by_category, d.total);
-  h += barChart('Par region', d.by_region, d.total);
-  h += barChart('Par saison', d.by_season, d.total);
-  h += barChart('Style de voyage', d.by_style, d.total);
-  h += barChart('Device', d.by_device, d.total);
-  h += '</div>';
-  h += '<div class="recent"><h3>Dernieres conversations ('+Math.min(d.recent.length,50)+')</h3>';
-  h += '<table><thead><tr><th>Question</th><th>Tags</th><th>Date</th></tr></thead><tbody>';
-  d.recent.slice(0,50).forEach(function(r){
-    var ts = r.ts ? new Date(r.ts).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
-    h += '<tr><td>'+r.question.substring(0,120)+'</td>';
-    h += '<td><span class="tag tag-cat">'+r.category+'</span><span class="tag tag-reg">'+r.region+'</span><span class="tag tag-dev">'+r.device+'</span></td>';
-    h += '<td>'+ts+'</td></tr>';
+function pct(n,t){return t?Math.round(n/t*100):0}
+
+function makeDonut(id,data,title){
+  var ctx=document.getElementById(id);
+  if(!ctx)return;
+  var entries=Object.entries(data).sort(function(a,b){return b[1]-a[1]});
+  if(charts[id])charts[id].destroy();
+  charts[id]=new Chart(ctx,{
+    type:'doughnut',
+    data:{labels:entries.map(function(e){return e[0]}),datasets:[{data:entries.map(function(e){return e[1]}),backgroundColor:PAL.slice(0,entries.length),borderWidth:0,hoverOffset:6}]},
+    options:{responsive:true,maintainAspectRatio:false,cutout:'62%',plugins:{legend:{position:'right',labels:{color:'#8b8fa3',font:{size:11},padding:10,usePointStyle:true,pointStyleWidth:8}}}}
   });
-  h += '</tbody></table></div>';
-  document.getElementById('content').innerHTML = h;
+}
+function makeBar(id,data,color){
+  var ctx=document.getElementById(id);
+  if(!ctx)return;
+  var entries=Object.entries(data).sort(function(a,b){return b[1]-a[1]});
+  if(charts[id])charts[id].destroy();
+  charts[id]=new Chart(ctx,{
+    type:'bar',
+    data:{labels:entries.map(function(e){return e[0]}),datasets:[{data:entries.map(function(e){return e[1]}),backgroundColor:color||'#356eb5',borderRadius:6,barPercentage:.7}]},
+    options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#8b8fa3',font:{size:11}}},y:{grid:{display:false},ticks:{color:'#e1e4ed',font:{size:11}}}}}
+  });
+}
+
+function render(d){
+  var mob=d.by_device.mobile||0;
+  var desk=d.by_device.desktop||0;
+  var h='';
+  h+='<div class="kpis">';
+  h+='<div class="kpi"><div class="val">'+d.total+'</div><div class="lbl">Total conversations</div></div>';
+  h+='<div class="kpi"><div class="val">'+d.today+'</div><div class="lbl">Aujourd\'hui</div></div>';
+  h+='<div class="kpi"><div class="val">'+d.this_week+'</div><div class="lbl">Cette semaine</div></div>';
+  h+='<div class="kpi"><div class="val">'+pct(mob,d.total)+'%</div><div class="lbl">Mobile</div></div>';
+  h+='<div class="kpi"><div class="val">'+pct(desk,d.total)+'%</div><div class="lbl">Desktop</div></div>';
+  h+='</div>';
+
+  h+='<div class="grid2">';
+  h+='<div class="card"><h3>Categories</h3><div style="height:260px"><canvas id="chCat"></canvas></div></div>';
+  h+='<div class="card"><h3>Regions</h3><div style="height:260px"><canvas id="chReg"></canvas></div></div>';
+  h+='</div>';
+
+  h+='<div class="grid3">';
+  h+='<div class="card"><h3>Saisons</h3><div style="height:220px"><canvas id="chSea"></canvas></div></div>';
+  h+='<div class="card"><h3>Style de voyage</h3><div style="height:220px"><canvas id="chSty"></canvas></div></div>';
+  h+='<div class="card"><h3>Devices</h3><div style="height:220px"><canvas id="chDev"></canvas></div></div>';
+  h+='</div>';
+
+  h+='<div class="tbl"><h3>Dernieres conversations</h3>';
+  h+='<table><thead><tr><th>Question</th><th>Categorie</th><th>Region</th><th>Saison</th><th>Style</th><th>Device</th><th>Date</th></tr></thead><tbody>';
+  d.recent.slice(0,50).forEach(function(r){
+    var ts=r.ts?new Date(r.ts).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
+    h+='<tr>';
+    h+='<td>'+r.question.substring(0,100)+'</td>';
+    h+='<td><span class="tag tag-cat">'+r.category+'</span></td>';
+    h+='<td><span class="tag tag-reg">'+r.region+'</span></td>';
+    h+='<td><span class="tag tag-sea">'+r.season+'</span></td>';
+    h+='<td><span class="tag tag-sty">'+r.style+'</span></td>';
+    h+='<td><span class="tag tag-dev">'+r.device+'</span></td>';
+    h+='<td style="white-space:nowrap;color:#8b8fa3">'+ts+'</td>';
+    h+='</tr>';
+  });
+  h+='</tbody></table></div>';
+
+  document.getElementById('content').innerHTML=h;
+
+  setTimeout(function(){
+    makeDonut('chCat',d.by_category);
+    makeBar('chReg',d.by_region,'#22c55e');
+    makeDonut('chSea',d.by_season);
+    makeDonut('chSty',d.by_style);
+    makeDonut('chDev',d.by_device);
+  },50);
 }
 fetchStats();
-setInterval(fetchStats, 60000);
+setInterval(fetchStats,60000);
 </script>
 </body>
 </html>"""
