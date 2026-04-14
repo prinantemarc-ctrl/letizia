@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     chroma_database: str = ""
     chroma_collection: str = "visit_corsica_fr"
 
+    log_collection: str = "conversations_log"
+    admin_key: str = ""
+
     rag_top_k: int = 6
     rag_max_distance: float = 0.85
 
@@ -49,7 +52,7 @@ class Settings(BaseSettings):
             object.__setattr__(self, "pages_jsonl", _PROJECT_ROOT / self.pages_jsonl)
         for field in ("chroma_host", "chroma_api_key", "chroma_tenant", "chroma_database",
                        "anthropic_api_key", "anthropic_model", "openai_api_key",
-                       "openai_chat_model", "openai_embedding_model"):
+                       "openai_chat_model", "openai_embedding_model", "admin_key"):
             val = getattr(self, field, "")
             if isinstance(val, str) and val != val.strip():
                 object.__setattr__(self, field, val.strip())

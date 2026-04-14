@@ -9,21 +9,24 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
+import uuid
+from collections import Counter
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor, Future
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import chromadb
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import anthropic
 from openai import OpenAI
 from pydantic import BaseModel
 
+from api.classify import classify_question
 from api.config import Settings, get_settings
 from api.web_search import gather_web_context
 
@@ -92,11 +95,12 @@ def embed_texts(texts: list[str], settings: Settings) -> list[list[float]]:
 
 
 _chroma_col_cache: dict = {}
+_chroma_client_cache: dict = {}
 
-def get_collection(settings: Settings):
-    key = (settings.chroma_host, settings.chroma_tenant, settings.chroma_database, settings.chroma_collection)
-    if key not in _chroma_col_cache:
-        client = chromadb.HttpClient(
+def _get_chroma_client(settings: Settings):
+    key = (settings.chroma_host, settings.chroma_tenant, settings.chroma_database)
+    if key not in _chroma_client_cache:
+        _chroma_client_cache[key] = chromadb.HttpClient(
             host=settings.chroma_host,
             port=443,
             ssl=True,
@@ -104,7 +108,25 @@ def get_collection(settings: Settings):
             tenant=settings.chroma_tenant,
             database=settings.chroma_database,
         )
+    return _chroma_client_cache[key]
+
+
+def get_collection(settings: Settings):
+    key = ("rag", settings.chroma_collection)
+    if key not in _chroma_col_cache:
+        client = _get_chroma_client(settings)
         _chroma_col_cache[key] = client.get_collection(settings.chroma_collection)
+    return _chroma_col_cache[key]
+
+
+def get_log_collection(settings: Settings):
+    key = ("log", settings.log_collection)
+    if key not in _chroma_col_cache:
+        client = _get_chroma_client(settings)
+        _chroma_col_cache[key] = client.get_or_create_collection(
+            name=settings.log_collection,
+            metadata={"hnsw:space": "cosine"},
+        )
     return _chroma_col_cache[key]
 
 
@@ -446,12 +468,42 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             )
         return question
 
+    # ── Logging async des conversations ────────────────────────────────
+    def _log_conversation(question: str, answer: str, user_agent: str = "") -> None:
+        try:
+            device = "mobile" if any(k in user_agent.lower() for k in ("mobile", "android", "iphone")) else "desktop"
+            tags = classify_question(
+                question, answer[:300],
+                api_key=settings.anthropic_api_key,
+                model=settings.anthropic_model,
+            )
+            col = get_log_collection(settings)
+            emb = embed_texts([question], settings)
+            col.add(
+                ids=[str(uuid.uuid4())],
+                documents=[question],
+                embeddings=emb,
+                metadatas=[{
+                    "question": question[:500],
+                    "answer_preview": answer[:200],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "category": tags.get("category", "general"),
+                    "region": tags.get("region", "non-specifique"),
+                    "season": tags.get("season", "non-specifique"),
+                    "travel_style": tags.get("travel_style", "non-specifique"),
+                    "device": device,
+                }],
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Log conversation echoue: %s", e)
+
     # ── Endpoint streaming (SSE) ─────────────────────────────────────
     @app.post("/api/chat/stream")
-    def chat_stream(body: ChatRequest) -> StreamingResponse:
+    def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
         question = (body.message or "").strip()
         if not question or len(question) > 4000:
             raise HTTPException(status_code=400, detail="Message vide ou trop long.")
+        ua = request.headers.get("user-agent", "")
 
         def generate():
             import time
@@ -474,17 +526,195 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             cleaned = _clean_answer("".join(full))
             yield f"data: {json.dumps({'done': True, 'full': cleaned})}\n\n"
 
+            if cleaned:
+                _search_pool.submit(_log_conversation, question, cleaned, ua)
+
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     # ── Endpoint classique (fallback) ────────────────────────────────
     @app.post("/api/chat", response_model=ChatResponse)
-    def chat(body: ChatRequest) -> ChatResponse:
+    def chat(body: ChatRequest, request: Request) -> ChatResponse:
         question = (body.message or "").strip()
         if not question or len(question) > 4000:
             raise HTTPException(status_code=400, detail="Message vide ou trop long.")
         user_msg = _build_user_msg(question)
         full = "".join(_stream_llm(user_msg))
-        return ChatResponse(answer=_clean_answer(full))
+        cleaned = _clean_answer(full)
+        if cleaned:
+            ua = request.headers.get("user-agent", "")
+            _search_pool.submit(_log_conversation, question, cleaned, ua)
+        return ChatResponse(answer=cleaned)
+
+    # ── Admin: vérification clé ──────────────────────────────────────
+    def _check_admin(key: str) -> None:
+        if not settings.admin_key or key != settings.admin_key:
+            raise HTTPException(status_code=403, detail="Acces refuse.")
+
+    # ── Admin: stats JSON ────────────────────────────────────────────
+    @app.get("/api/admin/stats")
+    def admin_stats(key: str = Query("")) -> JSONResponse:
+        _check_admin(key)
+        try:
+            col = get_log_collection(settings)
+            all_data = col.get(include=["metadatas"])
+            metas = all_data.get("metadatas") or []
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+        now = datetime.now(timezone.utc)
+        today_str = now.strftime("%Y-%m-%d")
+        week_ago = now - timedelta(days=7)
+
+        cat_counter: Counter = Counter()
+        region_counter: Counter = Counter()
+        season_counter: Counter = Counter()
+        style_counter: Counter = Counter()
+        device_counter: Counter = Counter()
+        today_count = 0
+        week_count = 0
+        recent: list[dict] = []
+
+        for m in metas:
+            cat_counter[m.get("category", "general")] += 1
+            region_counter[m.get("region", "non-specifique")] += 1
+            season_counter[m.get("season", "non-specifique")] += 1
+            style_counter[m.get("travel_style", "non-specifique")] += 1
+            device_counter[m.get("device", "desktop")] += 1
+            ts = m.get("timestamp", "")
+            if ts.startswith(today_str):
+                today_count += 1
+            try:
+                if datetime.fromisoformat(ts) >= week_ago:
+                    week_count += 1
+            except Exception:  # noqa: BLE001
+                pass
+            recent.append({
+                "question": m.get("question", "")[:200],
+                "category": m.get("category", ""),
+                "region": m.get("region", ""),
+                "season": m.get("season", ""),
+                "style": m.get("travel_style", ""),
+                "device": m.get("device", ""),
+                "ts": ts,
+            })
+
+        recent.sort(key=lambda x: x["ts"], reverse=True)
+
+        return JSONResponse({
+            "total": len(metas),
+            "today": today_count,
+            "this_week": week_count,
+            "by_category": dict(cat_counter.most_common()),
+            "by_region": dict(region_counter.most_common()),
+            "by_season": dict(season_counter.most_common()),
+            "by_style": dict(style_counter.most_common()),
+            "by_device": dict(device_counter.most_common()),
+            "recent": recent[:50],
+        })
+
+    # ── Admin: dashboard HTML ────────────────────────────────────────
+    @app.get("/admin", response_class=HTMLResponse)
+    def admin_dashboard(key: str = Query("")) -> HTMLResponse:
+        _check_admin(key)
+        html = """<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/png" href="/static/widget/favicon.png">
+<title>Letizia — Admin Dashboard</title>
+<style>
+:root{--blue:#356eb5;--dark:#111;--grey:#666;--light:#f5f5f5;--green:#2a9d5c;--red:#c0392b}
+*{box-sizing:border-box;margin:0}
+body{font-family:"Segoe UI",system-ui,sans-serif;background:#fafafa;color:var(--dark);min-height:100vh}
+.top{background:var(--dark);color:#fff;padding:18px 24px;display:flex;align-items:center;justify-content:space-between}
+.top h1{font-size:1.1rem;font-weight:700}
+.top .badge{font-size:.75rem;background:var(--blue);padding:3px 10px;border-radius:20px}
+.wrap{max-width:72rem;margin:0 auto;padding:24px 20px}
+
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:28px}
+.kpi{background:#fff;border-radius:12px;padding:20px;border:1px solid #eee;text-align:center}
+.kpi .val{font-size:1.8rem;font-weight:800;color:var(--blue)}
+.kpi .lbl{font-size:.8rem;color:var(--grey);margin-top:4px}
+
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;margin-bottom:28px}
+.chart{background:#fff;border-radius:12px;padding:20px;border:1px solid #eee}
+.chart h3{font-size:.9rem;font-weight:700;margin-bottom:14px;color:var(--dark)}
+.bar-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.bar-label{width:110px;font-size:.78rem;color:var(--grey);text-align:right;flex-shrink:0}
+.bar-track{flex:1;height:22px;background:var(--light);border-radius:6px;overflow:hidden}
+.bar-fill{height:100%;background:var(--blue);border-radius:6px;min-width:2px;transition:width .3s}
+.bar-val{width:32px;font-size:.78rem;font-weight:600;color:var(--dark)}
+
+.recent{background:#fff;border-radius:12px;padding:20px;border:1px solid #eee}
+.recent h3{font-size:.9rem;font-weight:700;margin-bottom:14px}
+.recent table{width:100%;border-collapse:collapse;font-size:.82rem}
+.recent th{text-align:left;padding:8px 6px;border-bottom:2px solid #eee;color:var(--grey);font-weight:600}
+.recent td{padding:7px 6px;border-bottom:1px solid #f0f0f0}
+.tag{display:inline-block;font-size:.7rem;padding:2px 7px;border-radius:4px;font-weight:600;margin:1px}
+.tag-cat{background:#e8f0fe;color:var(--blue)}
+.tag-reg{background:#e8f8ee;color:var(--green)}
+.tag-dev{background:#f5f5f5;color:var(--grey)}
+#loading{text-align:center;padding:40px;color:var(--grey)}
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>Letizia — Dashboard Admin</h1>
+  <span class="badge" id="refresh-badge">Auto-refresh 60s</span>
+</div>
+<div class="wrap" id="content"><div id="loading">Chargement...</div></div>
+
+<script>
+var KEY = new URLSearchParams(location.search).get('key') || '';
+function fetchStats() {
+  fetch('/api/admin/stats?key=' + encodeURIComponent(KEY))
+    .then(function(r){ return r.json(); })
+    .then(render)
+    .catch(function(e){ document.getElementById('content').innerHTML = '<p style="color:red;padding:40px">Erreur: '+e.message+'</p>'; });
+}
+function pct(n, total){ return total ? Math.round(n/total*100) : 0; }
+function barChart(title, data, total){
+  var entries = Object.entries(data).sort(function(a,b){return b[1]-a[1];});
+  var max = entries.length ? entries[0][1] : 1;
+  var rows = entries.map(function(e){
+    var w = Math.max(2, Math.round(e[1]/max*100));
+    return '<div class="bar-row"><span class="bar-label">'+e[0]+'</span><div class="bar-track"><div class="bar-fill" style="width:'+w+'%"></div></div><span class="bar-val">'+e[1]+'</span></div>';
+  }).join('');
+  return '<div class="chart"><h3>'+title+'</h3>'+rows+'</div>';
+}
+function render(d){
+  var h = '';
+  h += '<div class="kpis">';
+  h += '<div class="kpi"><div class="val">'+d.total+'</div><div class="lbl">Total conversations</div></div>';
+  h += '<div class="kpi"><div class="val">'+d.today+'</div><div class="lbl">Aujourd\\'hui</div></div>';
+  h += '<div class="kpi"><div class="val">'+d.this_week+'</div><div class="lbl">Cette semaine</div></div>';
+  h += '<div class="kpi"><div class="val">'+pct(d.by_device.mobile||0,d.total)+'%</div><div class="lbl">Mobile</div></div>';
+  h += '</div>';
+  h += '<div class="charts">';
+  h += barChart('Par categorie', d.by_category, d.total);
+  h += barChart('Par region', d.by_region, d.total);
+  h += barChart('Par saison', d.by_season, d.total);
+  h += barChart('Style de voyage', d.by_style, d.total);
+  h += barChart('Device', d.by_device, d.total);
+  h += '</div>';
+  h += '<div class="recent"><h3>Dernieres conversations ('+Math.min(d.recent.length,50)+')</h3>';
+  h += '<table><thead><tr><th>Question</th><th>Tags</th><th>Date</th></tr></thead><tbody>';
+  d.recent.slice(0,50).forEach(function(r){
+    var ts = r.ts ? new Date(r.ts).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+    h += '<tr><td>'+r.question.substring(0,120)+'</td>';
+    h += '<td><span class="tag tag-cat">'+r.category+'</span><span class="tag tag-reg">'+r.region+'</span><span class="tag tag-dev">'+r.device+'</span></td>';
+    h += '<td>'+ts+'</td></tr>';
+  });
+  h += '</tbody></table></div>';
+  document.getElementById('content').innerHTML = h;
+}
+fetchStats();
+setInterval(fetchStats, 60000);
+</script>
+</body>
+</html>"""
+        return HTMLResponse(content=html)
 
     return app
 
